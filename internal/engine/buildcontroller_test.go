@@ -54,8 +54,10 @@ func TestBuildControllerIgnoresImageTags(t *testing.T) {
 	assert.Equal(t, manifest.ImageTargetAt(0), call.image())
 	assert.Equal(t, []string{}, call.oneState().FilesChanged())
 
-	pod := f.testPod("pod-id", manifest, "Running", testContainer, time.Now())
-	setImage(pod, "image-foo:othertag")
+	pod := NewPodBuilder(t, manifest).
+		WithPodID("pod-id").
+		WithImage("image-foo:othertag", 0).
+		Build()
 	f.podEvent(pod)
 	f.fsWatcher.events <- watch.NewFileEvent(f.JoinPath("main.go"))
 
@@ -164,7 +166,7 @@ func TestBuildControllerTwoContainers(t *testing.T) {
 	assert.Equal(t, testContainer, c0.ContainerID.String(), "container ID for cInfo at index 0")
 	assert.Equal(t, "cID-same-image", c1.ContainerID.String(), "container ID for cInfo at index 1")
 
-	assert.Equal(t, "test container!", c0.ContainerName.String(), "container name for cInfo at index 0")
+	assert.Equal(t, "sancho", c0.ContainerName.String(), "container name for cInfo at index 0")
 	assert.Equal(t, "same image", c1.ContainerName.String(), "container name for cInfo at index 1")
 
 	err := f.Stop()

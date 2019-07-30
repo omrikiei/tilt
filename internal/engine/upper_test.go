@@ -22,7 +22,6 @@ import (
 	"github.com/windmilleng/wmclient/pkg/analytics"
 	"gopkg.in/yaml.v2"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -70,8 +69,6 @@ k8s_yaml('snack.yaml')
 	simpleYAML    = testyaml.SnackYaml
 	testContainer = "myTestContainer"
 )
-
-const testDeployID = model.DeployID(1234567890)
 
 // represents a single call to `BuildAndDeploy`
 type buildAndDeployCall struct {
@@ -987,60 +984,13 @@ func (f *testFixture) testPod(podID string, manifest model.Manifest, phase strin
 }
 
 func (f *testFixture) testPodWithDeployID(podID string, manifest model.Manifest, phase string, cID string, creationTime time.Time, deployID model.DeployID) *v1.Pod {
-	msgs := validation.NameIsDNSSubdomain(podID, false)
-	if len(msgs) != 0 {
-		f.T().Fatalf("pod id %q is invalid: %s", podID, msgs)
-	}
-
-	var containerID string
-	if cID != "" {
-		containerID = fmt.Sprintf("%s%s", k8s.ContainerIDPrefix, cID)
-	}
-
-	manifestName := manifest.Name.String()
-
-	// Use the pod ID as the image tag. This is kind of weird, but gets at the semantics
-	// we want (e.g., a new pod ID indicates that this is a new build).
-	// Tests that don't want this behavior should replace the image with setImage(pod, imageName)
-	image := fmt.Sprintf("%s:%s", f.imageNameForManifest(manifestName).String(), podID)
-	return &v1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              podID,
-			CreationTimestamp: metav1.Time{Time: creationTime},
-			Labels: map[string]string{
-				k8s.ManifestNameLabel: manifestName,
-				k8s.TiltDeployIDLabel: deployID.String(),
-			},
-		},
-		Spec: v1.PodSpec{
-			Containers: []v1.Container{
-				{
-					Name:  "main",
-					Image: image,
-				},
-			},
-		},
-		Status: v1.PodStatus{
-			Phase: v1.PodPhase(phase),
-			ContainerStatuses: []v1.ContainerStatus{
-				{
-					Name:        "test container!",
-					Image:       image,
-					Ready:       true,
-					ContainerID: containerID,
-				},
-			},
-		},
-	}
-}
-
-func setImage(pod *v1.Pod, image string) {
-	pod.Spec.Containers[0].Image = image
-	pod.Status.ContainerStatuses[0].Image = image
-}
-
-func setRestartCount(pod *v1.Pod, restartCount int) {
-	pod.Status.ContainerStatuses[0].RestartCount = int32(restartCount)
+	return NewPodBuilder(f.T(), manifest).
+		WithPodID(podID).
+		WithPhase(phase).
+		WithContainerID(cID, 0).
+		WithCreationTime(creationTime).
+		WithDeployID(deployID).
+		Build()
 }
 
 func TestPodEvent(t *testing.T) {
@@ -1175,7 +1125,7 @@ func TestPodEventContainerStatusWithoutImage(t *testing.T) {
 	manifest := model.Manifest{
 		Name: model.ManifestName("foobar"),
 	}.WithDeployTarget(model.K8sTarget{
-		YAML: "fake-yaml",
+		YAML: SanchoYAML,
 	})
 	deployID := model.DeployID(123)
 	f.b.nextDeployID = deployID
@@ -1718,7 +1668,7 @@ func TestUpperRecordPodWithMultipleContainers(t *testing.T) {
 		}
 
 		c1 := pod.Containers[0]
-		require.Equal(t, container.Name("test container!"), c1.Name)
+		require.Equal(t, container.Name("sancho"), c1.Name)
 		require.Equal(t, container.ID(testContainer), c1.ID)
 		require.True(t, c1.Ready)
 		require.True(t, c1.Blessed)
@@ -1774,7 +1724,7 @@ func TestUpperProcessOtherContainersIfOneErrors(t *testing.T) {
 			return false
 		}
 
-		require.Equal(t, container.Name("test container!"), pod.Containers[0].Name)
+		require.Equal(t, container.Name("sancho"), pod.Containers[0].Name)
 		require.Equal(t, container.Name("extra2"), pod.Containers[1].Name)
 
 		return true
@@ -3059,12 +3009,8 @@ func (f *testFixture) podEvent(pod *v1.Pod) {
 	f.store.Dispatch(NewPodChangeAction(pod))
 }
 
-func (f *testFixture) imageNameForManifest(manifestName string) reference.Named {
-	return container.MustParseNamed(manifestName)
-}
-
 func (f *testFixture) newManifest(name string, syncs []model.Sync) model.Manifest {
-	ref := f.imageNameForManifest(name)
+	ref := imageNameForManifest(name)
 	return f.newManifestWithRef(name, ref, syncs)
 }
 
@@ -3072,7 +3018,7 @@ func (f *testFixture) newManifestWithRef(name string, ref reference.Named, syncs
 	refSel := container.NewRefSelector(ref)
 	return assembleK8sManifest(
 		model.Manifest{Name: model.ManifestName(name)},
-		model.K8sTarget{YAML: "fake-yaml"},
+		model.K8sTarget{YAML: SanchoYAML},
 		model.NewImageTarget(refSel).
 			WithBuildDetails(model.FastBuild{
 				BaseDockerfile: `from golang:1.10`,
